@@ -5,6 +5,8 @@
 
 > 当前 GUI 已升级为 **Qt6 教学调试界面**，支持 Baseline/Extended 双语言模式、真实语法轨迹、源码映射、P-Code 断点与单步、PC/BP/SP、运行栈、活动记录和非阻塞输入。Windows 构建、使用方法和答辩流程请先阅读 [GUI_使用说明.md](GUI_使用说明.md)。
 
+小组成员首次加入、分支提交和 Windows MinGW 构建步骤见 [协作说明](CONTRIBUTING.md)。
+
 ---
 
 ## 一、项目环境
@@ -22,8 +24,8 @@
 前置准备（Windows）：
 
 ```powershell
-# 在 Qt Maintenance Tool 中安装 Qt 6.x 的 MSVC 64-bit 套件，
-# 并在 Visual Studio Installer 中安装“使用 C++ 的桌面开发”。
+# 本项目正式构建：安装 Qt 6.12.0 MinGW 64-bit 套件及匹配的 MinGW 13.1、CMake、Ninja。
+# 如选择 MSVC 套件，还需在 Visual Studio Installer 中安装“使用 C++ 的桌面开发”。
 ```
 
 ---
