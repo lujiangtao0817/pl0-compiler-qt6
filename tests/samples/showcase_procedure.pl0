@@ -1,0 +1,11 @@
+var x;
+procedure increase;
+begin
+  x := x + 1;
+  writeln(x)
+end;
+begin
+  x := 40;
+  call increase;
+  call increase
+end.

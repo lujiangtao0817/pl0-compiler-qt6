@@ -1,0 +1,31 @@
+# Out-of-source CMake builds and local Qt Creator settings
+/build*/
+/release/
+/out/
+CMakeUserPresets.json
+*.user
+*.user.*
+.vs/
+.idea/
+
+# Compiled outputs and generated sample results
+*.exe
+*.dll
+*.obj
+*.o
+*.a
+*.lib
+*.pdb
+*.pcode
+/tests/sample_report.txt
+__pycache__/
+*.pyc
+
+# OS metadata and local secrets
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+*.pem
+*.key

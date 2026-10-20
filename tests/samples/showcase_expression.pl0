@@ -1,0 +1,6 @@
+const base = 2;
+var x;
+begin
+  x := base + 3 * 4;
+  writeln(x)
+end.
