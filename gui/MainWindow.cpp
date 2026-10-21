@@ -273,7 +273,39 @@ void MainWindow::setupUi() {
   pcodeTable_->setToolTip(tr("单击跳转到对应源码；双击任意一行设置或取消断点"));
   analysisTabs_->addTab(pcodeTable_, tr("P-Code"));
 
-  parseTraceTree_ = new QTreeWidget(analysisTabs_);
+  parseTracePanel_ = new QWidget(analysisTabs_);
+  auto* parseLayout = new QVBoxLayout(parseTracePanel_);
+  parseLayout->setContentsMargins(4, 4, 4, 4);
+  auto* parseControls = new QHBoxLayout;
+  auto addParseButton = [&](const QString& text, const char* name, auto slot) {
+    auto* button = new QPushButton(text, parseTracePanel_);
+    button->setObjectName(QString::fromLatin1(name));
+    parseControls->addWidget(button);
+    connect(button, &QPushButton::clicked, this, slot);
+    return button;
+  };
+  parsePrevious_ = addParseButton(tr("上一步"), "parsePrevious", &MainWindow::previousParseEvent);
+  parseNext_ = addParseButton(tr("下一步"), "parseNext", &MainWindow::nextParseEvent);
+  parsePlay_ = addParseButton(tr("播放"), "parsePlay", &MainWindow::playParseTrace);
+  parsePause_ = addParseButton(tr("暂停"), "parsePause", &MainWindow::pauseParseTrace);
+  parseReset_ = addParseButton(tr("重置"), "parseReset", &MainWindow::resetParseTrace);
+  parseFull_ = addParseButton(tr("全部"), "parseFull", &MainWindow::showFullParseTrace);
+  parseSpeed_ = new QComboBox(parseTracePanel_);
+  parseSpeed_->addItem(tr("慢速"), 1200);
+  parseSpeed_->addItem(tr("正常"), 600);
+  parseSpeed_->addItem(tr("快速"), 150);
+  parseSpeed_->setCurrentIndex(1);
+  parseControls->addWidget(parseSpeed_);
+  parseLayout->addLayout(parseControls);
+  parseProgress_ = new QLabel(parseTracePanel_);
+  parseProgress_->setObjectName(QStringLiteral("parseProgress"));
+  parseLayout->addWidget(parseProgress_);
+  parseDetail_ = new QLabel(parseTracePanel_);
+  parseDetail_->setWordWrap(true);
+  parseDetail_->setObjectName(QStringLiteral("parseDetail"));
+  parseLayout->addWidget(parseDetail_);
+  parseTraceTree_ = new QTreeWidget(parseTracePanel_);
+  parseTraceTree_->setObjectName(QStringLiteral("parseTraceTree"));
   parseTraceTree_->setHeaderLabels({tr("语法规则 / 事件"), tr("状态"), tr("源码位置")});
   parseTraceTree_->setAlternatingRowColors(true);
   parseTraceTree_->setUniformRowHeights(true);
@@ -281,7 +313,18 @@ void MainWindow::setupUi() {
   parseTraceTree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
   parseTraceTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
   parseTraceTree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-  analysisTabs_->addTab(parseTraceTree_, tr("语法轨迹"));
+  parseLayout->addWidget(parseTraceTree_, 1);
+  analysisTabs_->addTab(parseTracePanel_, tr("语法轨迹"));
+  parseTimer_ = new QTimer(this);
+  parseTimer_->setObjectName(QStringLiteral("parseTimer"));
+  connect(parseTimer_, &QTimer::timeout, this, &MainWindow::nextParseEvent);
+  connect(parseSpeed_, &QComboBox::currentIndexChanged, this, [this] {
+    parseTimer_->setInterval(parseSpeed_->currentData().toInt());
+  });
+  connect(analysisTabs_, &QTabWidget::currentChanged, this, [this] {
+    if (analysisTabs_->currentWidget() != parseTracePanel_) pauseParseTrace();
+  });
+  renderParseTrace();
 
   auto* runtimePanel = new QWidget(rightSplit);
   auto* runtimeLayout = new QVBoxLayout(runtimePanel);
@@ -553,7 +596,7 @@ void MainWindow::newFile() {
   tokensTable_->setRowCount(0);
   symbolsTable_->setRowCount(0);
   pcodeTable_->setRowCount(0);
-  parseTraceTree_->clear();
+  clearParseTrace();
   diagnosticsTable_->setRowCount(0);
   stackTable_->setRowCount(0);
   framesTable_->setRowCount(0);
@@ -585,7 +628,7 @@ void MainWindow::openFile() {
   tokensTable_->setRowCount(0);
   symbolsTable_->setRowCount(0);
   pcodeTable_->setRowCount(0);
-  parseTraceTree_->clear();
+  clearParseTrace();
   diagnosticsTable_->setRowCount(0);
   stackTable_->setRowCount(0);
   framesTable_->setRowCount(0);
@@ -636,6 +679,7 @@ void MainWindow::compileSource() { compileInternal(); }
 
 bool MainWindow::compileInternal() {
   runTimer_->stop();
+  pauseParseTrace();
   breakpoints_.clear();
   skipBreakpointOnce_ = -1;
   pausedAtBreakpoint_ = false;
@@ -840,7 +884,7 @@ void MainWindow::loadExample(int index) {
   tokensTable_->setRowCount(0);
   symbolsTable_->setRowCount(0);
   pcodeTable_->setRowCount(0);
-  parseTraceTree_->clear();
+  clearParseTrace();
   stackTable_->setRowCount(0);
   framesTable_->setRowCount(0);
   watchTable_->setRowCount(0);
@@ -851,6 +895,7 @@ void MainWindow::loadExample(int index) {
 
 void MainWindow::sourceChanged() {
   if (loadingSource_) return;
+  clearParseTrace();
   documentDirty_ = true;
   lastResult_.reset();
   vm_.reset();
@@ -870,7 +915,7 @@ void MainWindow::compilerOptionsChanged() {
   tokensTable_->setRowCount(0);
   symbolsTable_->setRowCount(0);
   pcodeTable_->setRowCount(0);
-  parseTraceTree_->clear();
+  clearParseTrace();
   diagnosticsTable_->setRowCount(0);
   stackTable_->setRowCount(0);
   framesTable_->setRowCount(0);
@@ -994,14 +1039,86 @@ void MainWindow::toggleBreakpoint(int row, int) {
 }
 
 void MainWindow::populateParseTrace(const std::vector<pl0::ParseTraceEvent>& trace) {
+  pauseParseTrace();
+  parseEvents_ = trace;
+  // Preserve the existing complete overview after compilation. Reset or Play
+  // starts an event-by-event replay of this immutable compiler trace.
+  parsePosition_ = parseEvents_.size();
+  renderParseTrace();
+}
+
+void MainWindow::clearParseTrace() {
+  pauseParseTrace();
+  parseEvents_.clear();
+  parsePosition_ = 0;
+  renderParseTrace();
+}
+
+void MainWindow::previousParseEvent() {
+  pauseParseTrace();
+  if (parsePosition_ > 0) --parsePosition_;
+  renderParseTrace();
+}
+
+void MainWindow::nextParseEvent() {
+  if (parsePosition_ < parseEvents_.size()) ++parsePosition_;
+  if (parsePosition_ == parseEvents_.size()) parseTimer_->stop();
+  renderParseTrace();
+}
+
+void MainWindow::playParseTrace() {
+  if (parseEvents_.empty()) return;
+  if (parsePosition_ == parseEvents_.size()) parsePosition_ = 0;
+  parseTimer_->start(parseSpeed_->currentData().toInt());
+  renderParseTrace();
+}
+
+void MainWindow::pauseParseTrace() {
+  if (parseTimer_) parseTimer_->stop();
+  if (parseProgress_) {
+    parsePlay_->setEnabled(!parseEvents_.empty());
+    parsePause_->setEnabled(false);
+  }
+}
+
+void MainWindow::resetParseTrace() {
+  pauseParseTrace();
+  parsePosition_ = 0;
+  renderParseTrace();
+}
+
+void MainWindow::showFullParseTrace() {
+  pauseParseTrace();
+  parsePosition_ = parseEvents_.size();
+  renderParseTrace();
+}
+
+void MainWindow::renderParseTrace() {
   parseTraceTree_->clear();
+  const bool playing = parseTimer_ && parseTimer_->isActive();
+  const bool available = !parseEvents_.empty();
+  parsePrevious_->setEnabled(parsePosition_ > 0 && !playing);
+  parseNext_->setEnabled(parsePosition_ < parseEvents_.size() && !playing);
+  parsePlay_->setEnabled(available && !playing);
+  parsePause_->setEnabled(playing);
+  parseReset_->setEnabled(available);
+  parseFull_->setEnabled(available);
+  parseProgress_->setText(tr("分析事件 %1 / %2 · %3（编译轨迹回放）")
+      .arg(static_cast<qulonglong>(parsePosition_))
+      .arg(static_cast<qulonglong>(parseEvents_.size()))
+      .arg(playing ? tr("播放中") : tr("已暂停")));
+  parseDetail_->setText(available ? tr("点击重置后逐步分析，或点击播放自动演示。")
+                                 : tr("请先编译源码，再查看分析过程。"));
   std::vector<QTreeWidgetItem*> stack;
-  for (const auto& event : trace) {
+  QTreeWidgetItem* current = nullptr;
+  for (std::size_t index = 0; index < parsePosition_; ++index) {
+    const auto& event = parseEvents_[index];
     const QString location = tr("%1:%2")
                                  .arg(event.range.begin.line)
                                  .arg(event.range.begin.column);
     if (event.kind == pl0::ParseTraceKind::Exit) {
       if (!stack.empty()) {
+        current = stack.back();
         stack.back()->setText(1, tr("完成"));
         stack.pop_back();
       }
@@ -1011,6 +1128,7 @@ void MainWindow::populateParseTrace(const std::vector<pl0::ParseTraceEvent>& tra
     QString label = event.rule.empty() ? QString::fromStdString(event.detail)
                                        : QString::fromStdString(event.rule);
     auto* item = new QTreeWidgetItem({label, parseTraceKindName(event.kind), location});
+    current = item;
     item->setData(0, kBeginLineRole, static_cast<qulonglong>(event.range.begin.line));
     item->setData(0, kBeginColumnRole, static_cast<qulonglong>(event.range.begin.column));
     item->setData(0, kEndLineRole, static_cast<qulonglong>(event.range.end.line));
@@ -1030,6 +1148,20 @@ void MainWindow::populateParseTrace(const std::vector<pl0::ParseTraceEvent>& tra
     if (event.kind == pl0::ParseTraceKind::Enter) stack.push_back(item);
   }
   parseTraceTree_->expandToDepth(2);
+  if (current) {
+    for (auto* parent = current->parent(); parent; parent = parent->parent()) parent->setExpanded(true);
+    parseTraceTree_->setCurrentItem(current);
+    parseTraceTree_->doItemsLayout();
+    parseTraceTree_->scrollToItem(current, QAbstractItemView::PositionAtCenter);
+    const auto& event = parseEvents_[parsePosition_ - 1];
+    parseDetail_->setText(tr("%1 · %2 · 源码 %3:%4 · 嵌套深度 %5")
+        .arg(parseTraceKindName(event.kind))
+        .arg(QString::fromStdString(event.rule.empty() ? event.detail : event.rule))
+        .arg(event.range.begin.line).arg(event.range.begin.column).arg(event.depth));
+    if (analysisTabs_->currentWidget() == parseTracePanel_)
+      selectSourceRange(event.range.begin.line, event.range.begin.column,
+                        event.range.end.line, event.range.end.column);
+  }
 }
 
 void MainWindow::refreshRuntime() {
@@ -1378,7 +1510,7 @@ void MainWindow::setDemoSource(QString source) {
   tokensTable_->setRowCount(0);
   symbolsTable_->setRowCount(0);
   pcodeTable_->setRowCount(0);
-  parseTraceTree_->clear();
+  clearParseTrace();
   diagnosticsTable_->setRowCount(0);
   stackTable_->setRowCount(0);
   framesTable_->setRowCount(0);
@@ -1402,7 +1534,7 @@ void MainWindow::showPCode() {
 }
 
 void MainWindow::showParseTrace() {
-  analysisTabs_->setCurrentWidget(parseTraceTree_);
+  analysisTabs_->setCurrentWidget(parseTracePanel_);
 }
 
 void MainWindow::showDiagnostics() {

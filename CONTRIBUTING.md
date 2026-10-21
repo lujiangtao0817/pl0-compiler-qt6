@@ -36,12 +36,13 @@ cd pl0-compiler-qt6
 Qt 安装位置不同的成员应调整下列路径。
 
 ```powershell
-$env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;" + $env:PATH
+$env:PATH = "C:\Qt\Tools\mingw1310_64\bin;C:\Qt\Tools\Ninja;C:\Qt\6.12.0\mingw_64\bin;" + $env:PATH
 & "C:\Qt\Tools\CMake_64\bin\cmake.exe" -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DPL0_ENABLE_ASAN=OFF -DCMAKE_PREFIX_PATH=C:/Qt/6.12.0/mingw_64 -DCMAKE_CXX_COMPILER=C:/Qt/Tools/mingw1310_64/bin/g++.exe
 & "C:\Qt\Tools\CMake_64\bin\cmake.exe" --build build
 & "C:\Qt\Tools\CMake_64\bin\ctest.exe" --test-dir build --output-on-failure
 python tools/run_samples.py --build-dir build --runtime-dir C:/Qt/Tools/mingw1310_64/bin
 ```
 
-CTest 注册一个聚合测试目标；其中实际测试用例数量以测试程序输出为准。
+核心测试由CTest的 `pl0` 聚合目标运行；其中实际用例数量以测试程序输出为准。
+同时开启GUI与测试时，还会注册 `parse_replay` 界面回放回归测试，使用Qt离屏平台运行。
 GUI 改动还应实际打开程序，核对操作与截图，命令行测试不能代替界面验收。

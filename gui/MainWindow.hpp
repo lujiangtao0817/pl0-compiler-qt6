@@ -64,6 +64,12 @@ class MainWindow final : public QMainWindow {
   void showSymbols();
   void showPCode();
   void showParseTrace();
+  void previousParseEvent();
+  void nextParseEvent();
+  void playParseTrace();
+  void pauseParseTrace();
+  void resetParseTrace();
+  void showFullParseTrace();
   void showDiagnostics();
   void showConsole();
   void showVariableWatch();
@@ -106,6 +112,8 @@ class MainWindow final : public QMainWindow {
   void populatePCode(const pl0::InstructionSequence& code);
   void refreshBreakpointMarkers();
   void populateParseTrace(const std::vector<pl0::ParseTraceEvent>& trace);
+  void clearParseTrace();
+  void renderParseTrace();
   void selectSourceRange(std::size_t beginLine, std::size_t beginColumn,
                          std::size_t endLine, std::size_t endColumn);
   QString stateName(AppState state) const;
@@ -123,6 +131,19 @@ class MainWindow final : public QMainWindow {
   QTableWidget* symbolsTable_ = nullptr;
   QTableWidget* pcodeTable_ = nullptr;
   QTreeWidget* parseTraceTree_ = nullptr;
+  QWidget* parseTracePanel_ = nullptr;
+  QLabel* parseProgress_ = nullptr;
+  QLabel* parseDetail_ = nullptr;
+  QPushButton* parsePrevious_ = nullptr;
+  QPushButton* parseNext_ = nullptr;
+  QPushButton* parsePlay_ = nullptr;
+  QPushButton* parsePause_ = nullptr;
+  QPushButton* parseReset_ = nullptr;
+  QPushButton* parseFull_ = nullptr;
+  QComboBox* parseSpeed_ = nullptr;
+  QTimer* parseTimer_ = nullptr;
+  std::vector<pl0::ParseTraceEvent> parseEvents_;
+  std::size_t parsePosition_ = 0;
   QTableWidget* diagnosticsTable_ = nullptr;
   QTableWidget* stackTable_ = nullptr;
   QTableWidget* framesTable_ = nullptr;
