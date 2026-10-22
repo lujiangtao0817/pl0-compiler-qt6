@@ -67,6 +67,7 @@ class MainWindow final : public QMainWindow {
   void showParseTrace();
   void showAst();
   void showSyntaxTree();
+  void showGrammarTree();
   void previousParseEvent();
   void nextParseEvent();
   void playParseTrace();
@@ -136,6 +137,7 @@ class MainWindow final : public QMainWindow {
   QTreeWidget* parseTraceTree_ = nullptr;
   AstWidget* astWidget_ = nullptr;
   AstWidget* syntaxTreeWidget_ = nullptr;
+  AstWidget* grammarTreeWidget_ = nullptr;
   QWidget* parseTracePanel_ = nullptr;
   QLabel* parseProgress_ = nullptr;
   QLabel* parseDetail_ = nullptr;

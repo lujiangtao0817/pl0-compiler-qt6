@@ -14,6 +14,7 @@
 #include <QGraphicsScene>
 #include <QGraphicsRectItem>
 #include <QDialog>
+#include <QComboBox>
 #include <iostream>
 #include <stdexcept>
 
@@ -211,6 +212,55 @@ int main(int argc, char** argv) {
       large->click();
       require(saved, "save textbook preview");
     }
+    QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+        Q_ARG(QString, QStringLiteral("var a,b,c,x; begin x := a + b * c end.")));
+    invoke("compileSource");
+    invoke("showGrammarTree");
+    auto* grammar = window.findChild<AstWidget*>("grammarPanel");
+    auto* formalView = window.findChild<QGraphicsView*>("grammarTreeView");
+    require(grammar && formalView, "formal E/T/F tree exists");
+    auto formalLabels = [&] {
+      QStringList result;
+      for (auto* item : formalView->scene()->items())
+        if (auto* rect = dynamic_cast<QGraphicsRectItem*>(item)) result.append(rect->data(0).toString());
+      return result;
+    };
+    const auto fullFormal = formalLabels();
+    require(fullFormal.count("E") == 2 && fullFormal.count("T") == 3 && fullFormal.count("F") == 3,
+            "a+b*c matches textbook left-recursive E/T/F structure");
+    require(fullFormal.contains("+") && fullFormal.contains("*") && fullFormal.contains("a"),
+            "formal leaves preserve terminals");
+    grammar->grammarCommand(4);
+    require(formalLabels() == QStringList{"E"}, "formal derivation starts with E");
+    grammar->grammarCommand(1);
+    require(formalLabels().size() == 4, "first production expands E to E plus T");
+    grammar->grammarCommand(0);
+    require(formalLabels() == QStringList{"E"}, "formal backward restores start symbol");
+    grammar->grammarCommand(5);
+    require(formalLabels() == fullFormal, "formal complete derivation restored");
+    if (argc > 5) {
+      bool saved = false;
+      QTimer::singleShot(50, &window, [&] {
+        if (auto* dialog = grammar->findChild<QDialog*>()) {
+          saved = dialog->grab().save(QString::fromLocal8Bit(argv[5]));
+          dialog->accept();
+        }
+      });
+      grammar->findChild<QPushButton*>("astLarge")->click();
+      require(saved, "save E/T/F tree preview");
+    }
+    QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+        Q_ARG(QString, QStringLiteral("var a,b,c,x; begin x := (a + b) * c end.")));
+    invoke("compileSource");
+    auto* choices = grammar->findChild<QComboBox*>("grammarExpression");
+    for (int i = 0; i < choices->count(); ++i)
+      if (choices->itemText(i).contains("( a + b ) * c")) choices->setCurrentIndex(i);
+    grammar->grammarCommand(5);
+    require(formalLabels().contains("(") && formalLabels().contains(")"), "formal tree retains parentheses");
+    QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+        Q_ARG(QString, QStringLiteral("var x; begin x := 1 < 2 end.")));
+    invoke("compileSource");
+    require(formalView->scene()->items().empty(), "unsupported grammar is not fabricated");
     std::cout << "Parse replay GUI regression checks passed\n";
     return 0;
   } catch (const std::exception& error) {

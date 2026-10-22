@@ -350,12 +350,21 @@ void MainWindow::setupUi() {
       case 5: showFullParseTrace(); break;
     }
   });
+  grammarTreeWidget_ = new AstWidget(analysisTabs_, true, true);
+  analysisTabs_->addTab(grammarTreeWidget_, tr("表达式文法树"));
+  grammarTreeWidget_->setGrammarTrace({});
+  connect(grammarTreeWidget_, &AstWidget::sourceActivated, this,
+      [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
+        selectSourceRange(bl, bc, el, ec);
+      });
 
   auto* runtimePanel = new QWidget(rightSplit);
   connect(analysisTabs_, &QTabWidget::currentChanged, this, [this, runtimePanel] {
     // The tree needs vertical space; runtime panels return on other tabs.
     runtimePanel->setVisible(analysisTabs_->currentWidget() != astWidget_ &&
-                             analysisTabs_->currentWidget() != syntaxTreeWidget_);
+                             analysisTabs_->currentWidget() != syntaxTreeWidget_ &&
+                             analysisTabs_->currentWidget() != grammarTreeWidget_);
+    if (analysisTabs_->currentWidget() != grammarTreeWidget_) grammarTreeWidget_->grammarCommand(3);
   });
   auto* runtimeLayout = new QVBoxLayout(runtimePanel);
   runtimeLayout->setContentsMargins(0, 0, 0, 0);
@@ -711,6 +720,7 @@ bool MainWindow::compileInternal() {
   runTimer_->stop();
   pauseParseTrace();
   astWidget_->setProgram(nullptr);
+  grammarTreeWidget_->setGrammarTrace({});
   breakpoints_.clear();
   skipBreakpointOnce_ = -1;
   pausedAtBreakpoint_ = false;
@@ -743,6 +753,7 @@ bool MainWindow::compileInternal() {
   populateSymbols(result.symbols);
   populatePCode(result.code);
   astWidget_->setProgram(result.program.get());
+  grammarTreeWidget_->setGrammarTrace(result.parse_trace);
   lastResult_ = std::move(result);
   prepareVm();
   setState(AppState::Compiled,
@@ -1080,6 +1091,7 @@ void MainWindow::populateParseTrace(const std::vector<pl0::ParseTraceEvent>& tra
 }
 
 void MainWindow::clearParseTrace() {
+  if (grammarTreeWidget_) grammarTreeWidget_->setGrammarTrace({});
   if (astWidget_) astWidget_->setProgram(nullptr);
   pauseParseTrace();
   parseEvents_.clear();
@@ -1578,6 +1590,10 @@ void MainWindow::showAst() {
 
 void MainWindow::showSyntaxTree() {
   analysisTabs_->setCurrentWidget(syntaxTreeWidget_);
+}
+
+void MainWindow::showGrammarTree() {
+  analysisTabs_->setCurrentWidget(grammarTreeWidget_);
 }
 
 void MainWindow::showDiagnostics() {

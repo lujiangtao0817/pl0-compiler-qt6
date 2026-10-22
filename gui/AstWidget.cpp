@@ -13,6 +13,9 @@
 #include <QFontMetricsF>
 #include <QDialog>
 #include <QTimer>
+#include <QComboBox>
+#include <QSignalBlocker>
+#include <stdexcept>
 #include <algorithm>
 #include <optional>
 #include <type_traits>
@@ -24,9 +27,100 @@ struct Node {
   std::vector<Node> children;
   qreal width = 180;
   bool active = false;
+  QString production;
 };
 
 QString str(const std::string& s) { return QString::fromStdString(s); }
+
+QString lexeme(const pl0::ParseTraceEvent& event) {
+  const QString detail = str(event.detail);
+  const int first = detail.indexOf('"');
+  const int last = detail.lastIndexOf('"');
+  return first >= 0 && last > first ? detail.mid(first + 1, last - first - 1) : detail;
+}
+
+// Build the concrete E/T/F tree for the exact source tokens, retaining grouping.
+// Left-associative operators are folded into left-recursive production nodes.
+class GrammarParser {
+ public:
+  explicit GrammarParser(const std::vector<pl0::ParseTraceEvent>& tokens) : tokens_(tokens) {}
+  Node parse() {
+    Node tree = expression();
+    if (index_ != tokens_.size()) throw std::runtime_error("unsupported expression");
+    return tree;
+  }
+ private:
+  const std::vector<pl0::ParseTraceEvent>& tokens_;
+  std::size_t index_ = 0;
+  QString peek() const { return index_ < tokens_.size() ? lexeme(tokens_[index_]) : QString(); }
+  Node terminal() {
+    if (index_ >= tokens_.size()) throw std::runtime_error("missing token");
+    const auto& event = tokens_[index_++];
+    return {lexeme(event), event.range, {}};
+  }
+  Node production(const QString& label, const QString& rule, std::vector<Node> children) {
+    Node node{label, {}, std::move(children)};
+    node.production = rule;
+    if (!node.children.empty() && node.children.front().range && node.children.back().range)
+      node.range = pl0::SourceRange{node.children.front().range->begin, node.children.back().range->end};
+    return node;
+  }
+  Node factor() {
+    if (peek() == "(") {
+      Node left = terminal();
+      Node expr = expression();
+      if (peek() != ")") throw std::runtime_error("missing parenthesis");
+      Node right = terminal();
+      return production("F", "F → ( E )", {std::move(left), std::move(expr), std::move(right)});
+    }
+    if (peek() == "+" || peek() == "-") {
+      Node op = terminal();
+      const QString rule = "F → " + op.label + " F";
+      Node child = factor();
+      return production("F", rule, {std::move(op), std::move(child)});
+    }
+    if (index_ >= tokens_.size()) throw std::runtime_error("missing operand");
+    const QString detail = str(tokens_[index_].detail);
+    const bool id = detail.startsWith("identifier ");
+    if (!id && !detail.startsWith("number ")) throw std::runtime_error("unsupported operand");
+    return production("F", id ? "F → id" : "F → num", {terminal()});
+  }
+  Node term() {
+    Node tree = production("T", "T → F", {factor()});
+    while (peek() == "*" || peek() == "/" || peek() == "%") {
+      Node op = terminal();
+      const QString rule = "T → T " + op.label + " F";
+      Node rhs = factor();
+      tree = production("T", rule, {std::move(tree), std::move(op), std::move(rhs)});
+    }
+    return tree;
+  }
+  Node expression() {
+    Node tree = production("E", "E → T", {term()});
+    while (peek() == "+" || peek() == "-") {
+      Node op = terminal();
+      const QString rule = "E → E " + op.label + " T";
+      Node rhs = term();
+      tree = production("E", rule, {std::move(tree), std::move(op), std::move(rhs)});
+    }
+    return tree;
+  }
+};
+
+std::size_t productionCount(const Node& node) {
+  std::size_t total = node.production.isEmpty() ? 0 : 1;
+  for (const auto& child : node.children) total += productionCount(child);
+  return total;
+}
+
+void reveal(Node& node, std::size_t& remaining, QString& rule) {
+  if (!node.production.isEmpty()) {
+    if (remaining == 0) { node.children.clear(); return; }
+    --remaining;
+    if (remaining == 0) { node.active = true; rule = node.production; }
+  }
+  for (auto& child : node.children) reveal(child, remaining, rule);
+}
 
 QString binary(pl0::BinaryOp op) {
   switch (op) {
@@ -175,7 +269,9 @@ void draw(QGraphicsScene* scene, const Node& node, qreal left, qreal y, bool tex
       textbook ? QPen(Qt::NoPen) : QPen(QColor("#93B4DB")),
       textbook ? QBrush(Qt::NoBrush) : QBrush(QColor(node.range ? "#E6EFFF" : "#F1F5F9")));
   rect->setData(0, node.label);
-  rect->setToolTip(node.label + (node.range ? QObject::tr("\n源码 %1:%2，点击定位")
+  rect->setData(5, node.production);
+  rect->setToolTip(node.label + (node.production.isEmpty() ? QString() : "\n" + node.production)
+      + (node.range ? QObject::tr("\n源码 %1:%2，点击定位")
       .arg(node.range->begin.line).arg(node.range->begin.column) : QObject::tr("\n结构分组")));
   if (node.range) {
     rect->setFlag(QGraphicsItem::ItemIsSelectable);
@@ -224,8 +320,9 @@ class View final : public QGraphicsView {
 };
 } // namespace
 
-AstWidget::AstWidget(QWidget* parent, bool textbook) : QWidget(parent), textbook_(textbook) {
-  setObjectName(textbook ? "syntaxTreePanel" : "astPanel");
+AstWidget::AstWidget(QWidget* parent, bool textbook, bool grammar)
+    : QWidget(parent), textbook_(textbook), grammar_(grammar) {
+  setObjectName(grammar ? "grammarPanel" : textbook ? "syntaxTreePanel" : "astPanel");
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(4, 4, 4, 4);
   auto* controls = new QHBoxLayout;
@@ -238,6 +335,23 @@ AstWidget::AstWidget(QWidget* parent, bool textbook) : QWidget(parent), textbook
   controls->addWidget(large);
   controls->addStretch();
   layout->addLayout(controls);
+  if (grammar) {
+    auto* rules = new QLabel(tr("E → E + T | E - T | T\nT → T * F | T / F | T % F | F\nF → ( E ) | id | num | + F | - F"), this);
+    rules->setWordWrap(true);
+    layout->addWidget(rules);
+    expressionChoice_ = new QComboBox(this);
+    expressionChoice_->setObjectName("grammarExpression");
+    layout->addWidget(expressionChoice_);
+    grammarTimer_ = new QTimer(this);
+    grammarTimer_->setInterval(700);
+    connect(grammarTimer_, &QTimer::timeout, this, [this] { grammarCommand(1); });
+    connect(expressionChoice_, &QComboBox::currentIndexChanged, this, [this] {
+      grammarTimer_->stop();
+      grammarPosition_ = 0;
+      renderGrammar();
+    });
+    connect(this, &AstWidget::replayRequested, this, &AstWidget::grammarCommand);
+  }
   if (textbook) {
     auto* replay = new QHBoxLayout;
     const QStringList labels{tr("上一步"), tr("下一步"), tr("播放"), tr("暂停"), tr("重置"), tr("全部")};
@@ -253,7 +367,7 @@ AstWidget::AstWidget(QWidget* parent, bool textbook) : QWidget(parent), textbook
   layout->addWidget(hint_);
   scene_ = new QGraphicsScene(this);
   view_ = new View(scene_, this);
-  view_->setObjectName(textbook ? "syntaxTreeView" : "astView");
+  view_->setObjectName(grammar ? "grammarTreeView" : textbook ? "syntaxTreeView" : "astView");
   view_->setRenderHint(QPainter::Antialiasing);
   view_->setDragMode(QGraphicsView::ScrollHandDrag);
   view_->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
@@ -267,8 +381,10 @@ AstWidget::AstWidget(QWidget* parent, bool textbook) : QWidget(parent), textbook
     QDialog dialog(this);
     dialog.setWindowTitle(textbook_ ? tr("教材风格分析树 · 滚轮缩放，拖动画布")
                                    : tr("抽象语法树 AST · 滚轮缩放，拖动画布"));
+    if (grammar_) dialog.setWindowTitle(tr("表达式文法树 E / T / F"));
     dialog.resize(1200, 800);
     auto* layout = new QVBoxLayout(&dialog);
+    if (grammar_) layout->addWidget(new QLabel(tr("E → E + T | E - T | T     T → T * F | T / F | T % F | F\nF → ( E ) | id | num | + F | - F"), &dialog));
     if (textbook_) {
       auto* replay = new QHBoxLayout;
       const QStringList labels{tr("上一步"), tr("下一步"), tr("播放"), tr("暂停"), tr("重置"), tr("全部")};
@@ -302,6 +418,8 @@ AstWidget::AstWidget(QWidget* parent, bool textbook) : QWidget(parent), textbook
     const auto* item = items.front();
     hint_->setText(tr("%1 · 源码 %2:%3").arg(item->data(0).toString())
         .arg(item->data(1).toULongLong()).arg(item->data(2).toULongLong()));
+    if (grammar_ && !item->data(5).toString().isEmpty())
+      hint_->setText(hint_->text() + " · " + item->data(5).toString());
     Q_EMIT sourceActivated(item->data(1).toULongLong(), item->data(2).toULongLong(),
                            item->data(3).toULongLong(), item->data(4).toULongLong());
   });
@@ -371,6 +489,81 @@ void AstWidget::setProgram(const pl0::Program* program) {
       }
     });
   }
+}
+
+void AstWidget::setGrammarTrace(const std::vector<pl0::ParseTraceEvent>& events) {
+  grammarTimer_->stop();
+  expressions_.clear();
+  QSignalBlocker blocker(expressionChoice_);
+  expressionChoice_->clear();
+  std::vector<std::pair<int, std::vector<pl0::ParseTraceEvent>>> open;
+  for (const auto& event : events) {
+    if (event.kind == pl0::ParseTraceKind::Enter && event.rule == "expression")
+      open.push_back({event.depth, {}});
+    else if (event.kind == pl0::ParseTraceKind::Consume)
+      for (auto& expression : open) expression.second.push_back(event);
+    else if (event.kind == pl0::ParseTraceKind::Exit && event.rule == "expression" && !open.empty()) {
+      auto tokens = std::move(open.back().second);
+      open.pop_back();
+      try {
+        GrammarParser parser(tokens);
+        parser.parse();
+        QStringList words;
+        for (const auto& token : tokens) words.append(lexeme(token));
+        expressionChoice_->addItem(tr("%1:%2  %3").arg(tokens.front().range.begin.line)
+            .arg(tokens.front().range.begin.column).arg(words.join(' ')));
+        expressions_.push_back(std::move(tokens));
+      } catch (const std::exception&) {
+        // Logic, relational, array and call syntax are outside the displayed
+        // arithmetic grammar; never present them as valid E/T/F derivations.
+      }
+    }
+  }
+  grammarPosition_ = 0;
+  renderGrammar();
+  grammarPosition_ = grammarTotal_;
+  renderGrammar();
+}
+
+void AstWidget::grammarCommand(int command) {
+  if (expressions_.empty()) return;
+  if (command != 1) grammarTimer_->stop();
+  switch (command) {
+    case 0: if (grammarPosition_ > 0) --grammarPosition_; break;
+    case 1: if (grammarPosition_ < grammarTotal_) ++grammarPosition_; break;
+    case 2:
+      if (grammarPosition_ == grammarTotal_) grammarPosition_ = 0;
+      grammarTimer_->start();
+      break;
+    case 3: break;
+    case 4: grammarPosition_ = 0; break;
+    case 5: grammarPosition_ = grammarTotal_; break;
+  }
+  if (grammarPosition_ == grammarTotal_) grammarTimer_->stop();
+  renderGrammar();
+}
+
+void AstWidget::renderGrammar() {
+  scene_->clear();
+  const int selected = expressionChoice_->currentIndex();
+  if (selected < 0 || selected >= static_cast<int>(expressions_.size())) {
+    grammarTotal_ = 0;
+    hint_->setText(tr("编译后选择算术表达式。此页仅按上方文法推导；逻辑、关系、数组及调用请查看整程序分析树。"));
+    return;
+  }
+  Node root = GrammarParser(expressions_[static_cast<std::size_t>(selected)]).parse();
+  grammarTotal_ = productionCount(root);
+  grammarPosition_ = std::min(grammarPosition_, grammarTotal_);
+  auto remaining = grammarPosition_;
+  QString rule = tr("开始符号 E");
+  reveal(root, remaining, rule);
+  hint_->setText(tr("最左推导 %1 / %2 · %3 · 叶子保留源码实际标识符和数值")
+      .arg(static_cast<qulonglong>(grammarPosition_)).arg(static_cast<qulonglong>(grammarTotal_)).arg(rule));
+  measure(root);
+  draw(scene_, root, 0, 0, true);
+  scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-24, -24, 24, 24));
+  fitPending_ = true;
+  if (isVisible()) view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
 }
 
 void AstWidget::showEvent(QShowEvent* event) {
