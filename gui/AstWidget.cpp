@@ -23,6 +23,7 @@ struct Node {
   std::optional<pl0::SourceRange> range;
   std::vector<Node> children;
   qreal width = 180;
+  bool active = false;
 };
 
 QString str(const std::string& s) { return QString::fromStdString(s); }
@@ -168,10 +169,11 @@ qreal measure(Node& node) {
   return node.width;
 }
 
-void draw(QGraphicsScene* scene, const Node& node, qreal left, qreal y) {
+void draw(QGraphicsScene* scene, const Node& node, qreal left, qreal y, bool textbook = false) {
   const qreal x = left + node.width / 2;
   auto* rect = scene->addRect(x - 80, y, 160, 52,
-      QPen(QColor("#93B4DB")), QBrush(QColor(node.range ? "#E6EFFF" : "#F1F5F9")));
+      textbook ? QPen(Qt::NoPen) : QPen(QColor("#93B4DB")),
+      textbook ? QBrush(Qt::NoBrush) : QBrush(QColor(node.range ? "#E6EFFF" : "#F1F5F9")));
   rect->setData(0, node.label);
   rect->setToolTip(node.label + (node.range ? QObject::tr("\n源码 %1:%2，点击定位")
       .arg(node.range->begin.line).arg(node.range->begin.column) : QObject::tr("\n结构分组")));
@@ -183,18 +185,22 @@ void draw(QGraphicsScene* scene, const Node& node, qreal left, qreal y) {
     rect->setData(4, QVariant::fromValue<qulonglong>(node.range->end.column));
   }
   auto* text = new QGraphicsTextItem(rect);
-  text->setDefaultTextColor(QColor("#123B6D"));
+  text->setDefaultTextColor(QColor(textbook ? (node.active ? "#D92D20" : "#111111") : "#123B6D"));
   text->setPlainText(QFontMetricsF(text->font()).elidedText(node.label, Qt::ElideRight, 144));
   text->setPos(x - 74, y + 12);
+  if (textbook) text->setPos(x - text->boundingRect().width() / 2, y + 12);
   text->setAcceptedMouseButtons(Qt::NoButton);
   qreal childLeft = left;
   for (const auto& child : node.children) {
     QPainterPath path(QPointF(x, y + 52));
     const qreal childX = childLeft + child.width / 2;
-    path.cubicTo(x, y + 78, childX, y + 78, childX, y + 104);
-    auto* edge = scene->addPath(path, QPen(QColor("#94A3B8"), 1.5));
+    if (textbook) {
+      path = QPainterPath(QPointF(x, y + 38));
+      path.lineTo(childX, y + 116);
+    } else path.cubicTo(x, y + 78, childX, y + 78, childX, y + 104);
+    auto* edge = scene->addPath(path, QPen(QColor(textbook ? "#333333" : "#94A3B8"), 1.5));
     edge->setZValue(-1);
-    draw(scene, child, childLeft, y + 104);
+    draw(scene, child, childLeft, y + 104, textbook);
     childLeft += child.width + 24;
   }
 }
@@ -218,8 +224,8 @@ class View final : public QGraphicsView {
 };
 } // namespace
 
-AstWidget::AstWidget(QWidget* parent) : QWidget(parent) {
-  setObjectName("astPanel");
+AstWidget::AstWidget(QWidget* parent, bool textbook) : QWidget(parent), textbook_(textbook) {
+  setObjectName(textbook ? "syntaxTreePanel" : "astPanel");
   auto* layout = new QVBoxLayout(this);
   layout->setContentsMargins(4, 4, 4, 4);
   auto* controls = new QHBoxLayout;
@@ -232,12 +238,22 @@ AstWidget::AstWidget(QWidget* parent) : QWidget(parent) {
   controls->addWidget(large);
   controls->addStretch();
   layout->addLayout(controls);
+  if (textbook) {
+    auto* replay = new QHBoxLayout;
+    const QStringList labels{tr("上一步"), tr("下一步"), tr("播放"), tr("暂停"), tr("重置"), tr("全部")};
+    for (int i = 0; i < labels.size(); ++i) {
+      auto* button = new QPushButton(labels[i], this);
+      replay->addWidget(button);
+      connect(button, &QPushButton::clicked, this, [this, i] { Q_EMIT replayRequested(i); });
+    }
+    layout->addLayout(replay);
+  }
   hint_ = new QLabel(tr("编译成功后显示 AST · 滚轮缩放 · 拖动画布 · 点击蓝色节点定位源码"), this);
   hint_->setWordWrap(true);
   layout->addWidget(hint_);
   scene_ = new QGraphicsScene(this);
   view_ = new View(scene_, this);
-  view_->setObjectName("astView");
+  view_->setObjectName(textbook ? "syntaxTreeView" : "astView");
   view_->setRenderHint(QPainter::Antialiasing);
   view_->setDragMode(QGraphicsView::ScrollHandDrag);
   view_->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
@@ -249,9 +265,20 @@ AstWidget::AstWidget(QWidget* parent) : QWidget(parent) {
   connect(actual, &QPushButton::clicked, view_, &QGraphicsView::resetTransform);
   connect(large, &QPushButton::clicked, this, [this] {
     QDialog dialog(this);
-    dialog.setWindowTitle(tr("抽象语法树 AST · 滚轮缩放，拖动画布"));
+    dialog.setWindowTitle(textbook_ ? tr("教材风格分析树 · 滚轮缩放，拖动画布")
+                                   : tr("抽象语法树 AST · 滚轮缩放，拖动画布"));
     dialog.resize(1200, 800);
     auto* layout = new QVBoxLayout(&dialog);
+    if (textbook_) {
+      auto* replay = new QHBoxLayout;
+      const QStringList labels{tr("上一步"), tr("下一步"), tr("播放"), tr("暂停"), tr("重置"), tr("全部")};
+      for (int i = 0; i < labels.size(); ++i) {
+        auto* button = new QPushButton(labels[i], &dialog);
+        replay->addWidget(button);
+        connect(button, &QPushButton::clicked, this, [this, i] { Q_EMIT replayRequested(i); });
+      }
+      layout->addLayout(replay);
+    }
     auto* fit = new QPushButton(tr("适应窗口"), &dialog);
     layout->addWidget(fit);
     auto* canvas = new View(scene_, &dialog);
@@ -263,6 +290,8 @@ AstWidget::AstWidget(QWidget* parent) : QWidget(parent) {
     connect(fit, &QPushButton::clicked, canvas, [this, canvas] {
       canvas->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
     });
+    if (textbook_) connect(scene_, &QGraphicsScene::sceneRectChanged, canvas,
+        [canvas](const QRectF& rect) { canvas->fitInView(rect, Qt::KeepAspectRatio); });
     dialog.show();
     canvas->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
     dialog.exec();
@@ -276,6 +305,51 @@ AstWidget::AstWidget(QWidget* parent) : QWidget(parent) {
     Q_EMIT sourceActivated(item->data(1).toULongLong(), item->data(2).toULongLong(),
                            item->data(3).toULongLong(), item->data(4).toULongLong());
   });
+}
+
+void AstWidget::setParseTrace(const std::vector<pl0::ParseTraceEvent>& events, std::size_t position) {
+  scene_->clear();
+  hint_->setText(tr("分析事件 %1 / %2 · 红色为当前节点 · 规则展开与词法单元来自实际分析记录")
+      .arg(static_cast<qulonglong>(position)).arg(static_cast<qulonglong>(events.size())));
+  if (position == 0) return;
+  Node root{QString(), {}, {}};
+  std::vector<Node*> stack{&root};
+  Node* current = nullptr;
+  for (std::size_t i = 0; i < std::min(position, events.size()); ++i) {
+    const auto& event = events[i];
+    if (event.kind == pl0::ParseTraceKind::Exit) {
+      if (stack.size() > 1) { current = stack.back(); stack.pop_back(); }
+      continue;
+    }
+    QString label = str(event.rule.empty() ? event.detail : event.rule);
+    if (event.kind == pl0::ParseTraceKind::Consume) {
+      const int first = label.indexOf('"');
+      const int last = label.lastIndexOf('"');
+      if (first >= 0 && last > first) label = label.mid(first + 1, last - first - 1);
+    }
+    const std::pair<const char*, const char*> names[]{
+        {"program", "程序"}, {"block", "分程序"}, {"statement", "语句"},
+        {"expression", "表达式"}, {"logic-term", "逻辑项"}, {"logic-factor", "逻辑因子"},
+        {"relation", "关系式"}, {"term", "项"}, {"factor", "因子"}, {"primary", "基本项"},
+        {"assignment", "赋值语句"}, {"begin-end", "复合语句"}, {"const-declarations", "常量声明"},
+        {"var-declarations", "变量声明"}, {"procedure-declarations", "过程声明"}};
+    if (event.kind == pl0::ParseTraceKind::Enter)
+      for (const auto& name : names) if (label == QLatin1String(name.first)) {
+        label = QString::fromUtf8(name.second); break;
+      }
+    stack.back()->children.push_back({label, event.range, {}});
+    current = &stack.back()->children.back();
+    if (event.kind == pl0::ParseTraceKind::Enter) stack.push_back(current);
+  }
+  if (current) current->active = true;
+  if (root.children.empty()) return;
+  // The synthetic container is not a grammar node and is never drawn.
+  Node& tree = root.children.front();
+  measure(tree);
+  draw(scene_, tree, 0, 0, true);
+  scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-24, -24, 24, 24));
+  fitPending_ = true;
+  if (isVisible()) view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
 }
 
 void AstWidget::setProgram(const pl0::Program* program) {

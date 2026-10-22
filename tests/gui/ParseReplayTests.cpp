@@ -162,6 +162,55 @@ int main(int argc, char** argv) {
       invoke("compileSource");
       require(!graph->scene()->items().empty(), "extended constructs render AST");
     }
+    QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+        Q_ARG(QString, QStringLiteral("var x; begin x := 2 + 3 end.")));
+    invoke("compileSource");
+    invoke("showSyntaxTree");
+    auto* syntaxView = window.findChild<QGraphicsView*>("syntaxTreeView");
+    require(syntaxView != nullptr, "textbook view exists");
+    auto labels = [&] {
+      QStringList result;
+      for (auto* item : syntaxView->scene()->items())
+        if (auto* rect = dynamic_cast<QGraphicsRectItem*>(item)) {
+          require(rect->pen().style() == Qt::NoPen, "textbook nodes have no boxes");
+          result.append(rect->data(0).toString());
+        }
+      return result;
+    };
+    const auto completeLabels = labels();
+    require(completeLabels.contains(QString::fromUtf8("表达式")) &&
+            completeLabels.contains("+") && completeLabels.contains(";") &&
+            completeLabels.contains("."), "textbook tree preserves rules and punctuation");
+    invoke("resetParseTrace");
+    require(syntaxView->scene()->items().empty(), "textbook reset clears future tree");
+    invoke("nextParseEvent");
+    require(labels().size() == 1, "textbook first step shows root only");
+    invoke("nextParseEvent");
+    const auto secondLabels = labels();
+    invoke("previousParseEvent");
+    invoke("nextParseEvent");
+    require(labels() == secondLabels, "textbook backward and forward are deterministic");
+    invoke("playParseTrace");
+    require(timer->isActive(), "textbook playback starts");
+    invoke("pauseParseTrace");
+    require(!timer->isActive(), "textbook playback pauses");
+    invoke("showFullParseTrace");
+    require(labels() == completeLabels, "textbook full overview restored");
+    if (argc > 4) {
+      invoke("resetParseTrace");
+      for (int i = 0; i < 18; ++i) invoke("nextParseEvent");
+      auto* syntaxPanel = syntaxView->parentWidget();
+      auto* large = syntaxPanel->findChild<QPushButton*>("astLarge");
+      bool saved = false;
+      QTimer::singleShot(50, &window, [&] {
+        if (auto* dialog = syntaxPanel->findChild<QDialog*>()) {
+          saved = dialog->grab().save(QString::fromLocal8Bit(argv[4]));
+          dialog->accept();
+        }
+      });
+      large->click();
+      require(saved, "save textbook preview");
+    }
     std::cout << "Parse replay GUI regression checks passed\n";
     return 0;
   } catch (const std::exception& error) {

@@ -323,21 +323,39 @@ void MainWindow::setupUi() {
     parseTimer_->setInterval(parseSpeed_->currentData().toInt());
   });
   connect(analysisTabs_, &QTabWidget::currentChanged, this, [this] {
-    if (analysisTabs_->currentWidget() != parseTracePanel_) pauseParseTrace();
+    if (analysisTabs_->currentWidget() != parseTracePanel_ &&
+        analysisTabs_->currentWidget() != syntaxTreeWidget_) pauseParseTrace();
   });
   renderParseTrace();
 
   astWidget_ = new AstWidget(analysisTabs_);
-  analysisTabs_->addTab(astWidget_, tr("语法树"));
+  analysisTabs_->addTab(astWidget_, tr("抽象语法树"));
   connect(astWidget_, &AstWidget::sourceActivated, this,
       [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
         selectSourceRange(bl, bc, el, ec);
       });
+  syntaxTreeWidget_ = new AstWidget(analysisTabs_, true);
+  analysisTabs_->addTab(syntaxTreeWidget_, tr("教材分析树"));
+  connect(syntaxTreeWidget_, &AstWidget::sourceActivated, this,
+      [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
+        selectSourceRange(bl, bc, el, ec);
+      });
+  connect(syntaxTreeWidget_, &AstWidget::replayRequested, this, [this](int command) {
+    switch (command) {
+      case 0: previousParseEvent(); break;
+      case 1: nextParseEvent(); break;
+      case 2: playParseTrace(); break;
+      case 3: pauseParseTrace(); break;
+      case 4: resetParseTrace(); break;
+      case 5: showFullParseTrace(); break;
+    }
+  });
 
   auto* runtimePanel = new QWidget(rightSplit);
   connect(analysisTabs_, &QTabWidget::currentChanged, this, [this, runtimePanel] {
     // The tree needs vertical space; runtime panels return on other tabs.
-    runtimePanel->setVisible(analysisTabs_->currentWidget() != astWidget_);
+    runtimePanel->setVisible(analysisTabs_->currentWidget() != astWidget_ &&
+                             analysisTabs_->currentWidget() != syntaxTreeWidget_);
   });
   auto* runtimeLayout = new QVBoxLayout(runtimePanel);
   runtimeLayout->setContentsMargins(0, 0, 0, 0);
@@ -1109,6 +1127,7 @@ void MainWindow::showFullParseTrace() {
 }
 
 void MainWindow::renderParseTrace() {
+  if (syntaxTreeWidget_) syntaxTreeWidget_->setParseTrace(parseEvents_, parsePosition_);
   parseTraceTree_->clear();
   const bool playing = parseTimer_ && parseTimer_->isActive();
   const bool available = !parseEvents_.empty();
@@ -1173,7 +1192,8 @@ void MainWindow::renderParseTrace() {
         .arg(parseTraceKindName(event.kind))
         .arg(QString::fromStdString(event.rule.empty() ? event.detail : event.rule))
         .arg(event.range.begin.line).arg(event.range.begin.column).arg(event.depth));
-    if (analysisTabs_->currentWidget() == parseTracePanel_)
+    if (analysisTabs_->currentWidget() == parseTracePanel_ ||
+        analysisTabs_->currentWidget() == syntaxTreeWidget_)
       selectSourceRange(event.range.begin.line, event.range.begin.column,
                         event.range.end.line, event.range.end.column);
   }
@@ -1554,6 +1574,10 @@ void MainWindow::showParseTrace() {
 
 void MainWindow::showAst() {
   analysisTabs_->setCurrentWidget(astWidget_);
+}
+
+void MainWindow::showSyntaxTree() {
+  analysisTabs_->setCurrentWidget(syntaxTreeWidget_);
 }
 
 void MainWindow::showDiagnostics() {

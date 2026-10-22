@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include "pl0/AST.hpp"
+#include "pl0/Parser.hpp"
 
 class QGraphicsScene;
 class QGraphicsView;
@@ -12,8 +13,9 @@ class QResizeEvent;
 class AstWidget final : public QWidget {
   Q_OBJECT
  public:
-  explicit AstWidget(QWidget* parent = nullptr);
+  explicit AstWidget(QWidget* parent = nullptr, bool textbook = false);
   void setProgram(const pl0::Program* program);
+  void setParseTrace(const std::vector<pl0::ParseTraceEvent>& events, std::size_t position);
 
  protected:
   void showEvent(QShowEvent* event) override;
@@ -22,10 +24,12 @@ class AstWidget final : public QWidget {
  Q_SIGNALS:
   void sourceActivated(qulonglong beginLine, qulonglong beginColumn,
                        qulonglong endLine, qulonglong endColumn);
+  void replayRequested(int command);
 
  private:
   QGraphicsScene* scene_;
   QGraphicsView* view_;
   QLabel* hint_;
   bool fitPending_ = true;
+  bool textbook_ = false;
 };
