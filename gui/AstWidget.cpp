@@ -203,6 +203,11 @@ class View final : public QGraphicsView {
  public:
   using QGraphicsView::QGraphicsView;
  protected:
+  void resizeEvent(QResizeEvent* event) override {
+    QGraphicsView::resizeEvent(event);
+    if (scene() && !scene()->items().empty())
+      fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
+  }
   void wheelEvent(QWheelEvent* event) override {
     if (event->angleDelta().y() == 0) { event->ignore(); return; }
     const qreal factor = event->angleDelta().y() > 0 ? 1.15 : 1 / 1.15;
@@ -301,5 +306,13 @@ void AstWidget::showEvent(QShowEvent* event) {
       view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
       fitPending_ = false;
     }
+  });
+}
+
+void AstWidget::resizeEvent(QResizeEvent* event) {
+  QWidget::resizeEvent(event);
+  QTimer::singleShot(0, this, [this] {
+    if (isVisible() && !scene_->items().empty())
+      view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
   });
 }

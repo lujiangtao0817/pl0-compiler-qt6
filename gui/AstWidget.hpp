@@ -7,6 +7,7 @@ class QGraphicsScene;
 class QGraphicsView;
 class QLabel;
 class QShowEvent;
+class QResizeEvent;
 
 class AstWidget final : public QWidget {
   Q_OBJECT
@@ -16,6 +17,7 @@ class AstWidget final : public QWidget {
 
  protected:
   void showEvent(QShowEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
 
  Q_SIGNALS:
   void sourceActivated(qulonglong beginLine, qulonglong beginColumn,
