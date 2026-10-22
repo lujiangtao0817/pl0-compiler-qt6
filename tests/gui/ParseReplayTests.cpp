@@ -36,6 +36,8 @@ int main(int argc, char** argv) {
   const QString fonts = qEnvironmentVariable("WINDIR") + QStringLiteral("/Fonts/");
   QFontDatabase::addApplicationFont(fonts + QStringLiteral("msyh.ttc"));
   QFontDatabase::addApplicationFont(fonts + QStringLiteral("consola.ttf"));
+  QFontDatabase::addApplicationFont(fonts + QStringLiteral("times.ttf"));
+  QFontDatabase::addApplicationFont(fonts + QStringLiteral("timesi.ttf"));
   app.setFont(QFont(QStringLiteral("Microsoft YaHei"), 10));
 #endif
   try {
@@ -238,6 +240,15 @@ int main(int argc, char** argv) {
     require(formalLabels() == QStringList{"E"}, "formal backward restores start symbol");
     grammar->grammarCommand(5);
     require(formalLabels() == fullFormal, "formal complete derivation restored");
+    auto checkFormalLayout = [&] {
+      std::vector<QRectF> boxes;
+      for (auto* item : formalView->scene()->items())
+        if (auto* rect = dynamic_cast<QGraphicsRectItem*>(item)) boxes.push_back(rect->sceneBoundingRect());
+      for (std::size_t i = 0; i < boxes.size(); ++i)
+        for (std::size_t j = i + 1; j < boxes.size(); ++j)
+          require(!boxes[i].intersects(boxes[j]), "book-style node labels do not overlap");
+    };
+    checkFormalLayout();
     if (argc > 5) {
       bool saved = false;
       QTimer::singleShot(50, &window, [&] {
@@ -257,6 +268,14 @@ int main(int argc, char** argv) {
       if (choices->itemText(i).contains("( a + b ) * c")) choices->setCurrentIndex(i);
     grammar->grammarCommand(5);
     require(formalLabels().contains("(") && formalLabels().contains(")"), "formal tree retains parentheses");
+    checkFormalLayout();
+    QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+        Q_ARG(QString, QStringLiteral("var long_name,other_value,x; begin x := long_name + other_value * (long_name + 12345) - other_value / 2 end.")));
+    invoke("compileSource");
+    for (int i = 0; i < choices->count(); ++i)
+      if (choices->itemText(i).contains("long_name + other_value *")) choices->setCurrentIndex(i);
+    grammar->grammarCommand(5);
+    checkFormalLayout();
     QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
         Q_ARG(QString, QStringLiteral("var x; begin x := 1 < 2 end.")));
     invoke("compileSource");

@@ -28,6 +28,7 @@ struct Node {
   qreal width = 180;
   bool active = false;
   QString production;
+  qreal anchor = 0;
 };
 
 QString str(const std::string& s) { return QString::fromStdString(s); }
@@ -263,6 +264,81 @@ qreal measure(Node& node) {
   return node.width;
 }
 
+QFont bookFont(const Node& node) {
+  QFont font(QStringLiteral("Times New Roman"), 17);
+  font.setStyleHint(QFont::Serif);
+  font.setItalic(!node.production.isEmpty() ||
+                 (!node.label.isEmpty() && node.label.front().isLetter()));
+  return font;
+}
+
+void measureBook(Node& node) {
+  const qreal textWidth = QFontMetricsF(bookFont(node)).horizontalAdvance(node.label) + 16;
+  node.width = std::max(qreal(38), textWidth);
+  node.anchor = node.width / 2;
+  if (node.children.empty()) return;
+  qreal extent = 0;
+  qreal first = 0;
+  qreal last = 0;
+  for (std::size_t i = 0; i < node.children.size(); ++i) {
+    auto& child = node.children[i];
+    measureBook(child);
+    if (i == 0) first = child.anchor;
+    last = extent + child.anchor;
+    extent += child.width + 28;
+  }
+  node.width = std::max(node.width, extent - 28);
+  node.anchor = (first + last) / 2;
+}
+
+void drawBook(QGraphicsScene* scene, const Node& node, qreal left, qreal y) {
+  const qreal x = left + node.anchor;
+  const QFont font = bookFont(node);
+  const qreal width = QFontMetricsF(font).horizontalAdvance(node.label) + 12;
+  auto* rect = scene->addRect(x - width / 2, y, width, 32, QPen(Qt::NoPen), QBrush(Qt::NoBrush));
+  rect->setData(0, node.label);
+  rect->setData(5, node.production);
+  rect->setToolTip(node.production.isEmpty() ? node.label : node.production);
+  if (node.range) {
+    rect->setFlag(QGraphicsItem::ItemIsSelectable);
+    rect->setData(1, QVariant::fromValue<qulonglong>(node.range->begin.line));
+    rect->setData(2, QVariant::fromValue<qulonglong>(node.range->begin.column));
+    rect->setData(3, QVariant::fromValue<qulonglong>(node.range->end.line));
+    rect->setData(4, QVariant::fromValue<qulonglong>(node.range->end.column));
+  }
+  auto* text = new QGraphicsTextItem(rect);
+  text->setFont(font);
+  text->setPlainText(node.label);
+  text->setDefaultTextColor(QColor(node.active ? "#9B3030" : "#202020"));
+  text->setPos(x - text->boundingRect().width() / 2,
+               y + (32 - text->boundingRect().height()) / 2);
+  text->setAcceptedMouseButtons(Qt::NoButton);
+  qreal childLeft = left;
+  for (std::size_t i = 0; i < node.children.size(); ++i) {
+    const auto& child = node.children[i];
+    qreal childOrigin = childLeft;
+    // In E -> E + T and T -> T * F, place the terminal operator
+    // directly below its parent, as in printed grammar diagrams.
+    if (node.children.size() == 3 && i == 1 && child.production.isEmpty() && child.children.empty())
+      childOrigin = x - child.anchor;
+    const qreal childX = childOrigin + child.anchor;
+    auto* edge = scene->addLine(x, y + 35, childX, y + 71, QPen(QColor("#505050"), 1.1));
+    edge->setZValue(-1);
+    drawBook(scene, child, childOrigin, y + 74);
+    childLeft += child.width + 28;
+  }
+}
+
+void fitCanvas(QGraphicsView* view, const QRectF& rect) {
+  view->fitInView(rect, Qt::KeepAspectRatio);
+  // Keep a small tree at a readable print-like scale instead of filling the
+  // entire screen with a single letter during the first derivation step.
+  if (view->transform().m11() > 1.35) {
+    const qreal correction = 1.35 / view->transform().m11();
+    view->scale(correction, correction);
+  }
+}
+
 void draw(QGraphicsScene* scene, const Node& node, qreal left, qreal y, bool textbook = false) {
   const qreal x = left + node.width / 2;
   auto* rect = scene->addRect(x - 80, y, 160, 52,
@@ -308,7 +384,7 @@ class View final : public QGraphicsView {
   void resizeEvent(QResizeEvent* event) override {
     QGraphicsView::resizeEvent(event);
     if (scene() && !scene()->items().empty())
-      fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
+      fitCanvas(this, scene()->sceneRect());
   }
   void wheelEvent(QWheelEvent* event) override {
     if (event->angleDelta().y() == 0) { event->ignore(); return; }
@@ -374,7 +450,7 @@ AstWidget::AstWidget(QWidget* parent, bool textbook, bool grammar)
   view_->setBackgroundBrush(QColor("#FFFFFF"));
   layout->addWidget(view_, 1);
   connect(fit, &QPushButton::clicked, this, [this] {
-    if (!scene_->items().empty()) view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+    if (!scene_->items().empty()) fitCanvas(view_, scene_->sceneRect());
   });
   connect(actual, &QPushButton::clicked, view_, &QGraphicsView::resetTransform);
   connect(large, &QPushButton::clicked, this, [this] {
@@ -404,12 +480,12 @@ AstWidget::AstWidget(QWidget* parent, bool textbook, bool grammar)
     canvas->setBackgroundBrush(Qt::white);
     layout->addWidget(canvas);
     connect(fit, &QPushButton::clicked, canvas, [this, canvas] {
-      canvas->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+      fitCanvas(canvas, scene_->sceneRect());
     });
     if (textbook_) connect(scene_, &QGraphicsScene::sceneRectChanged, canvas,
-        [canvas](const QRectF& rect) { canvas->fitInView(rect, Qt::KeepAspectRatio); });
+        [canvas](const QRectF& rect) { fitCanvas(canvas, rect); });
     dialog.show();
-    canvas->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+    fitCanvas(canvas, scene_->sceneRect());
     dialog.exec();
   });
   connect(scene_, &QGraphicsScene::selectionChanged, this, [this] {
@@ -467,7 +543,7 @@ void AstWidget::setParseTrace(const std::vector<pl0::ParseTraceEvent>& events, s
   draw(scene_, tree, 0, 0, true);
   scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-24, -24, 24, 24));
   fitPending_ = true;
-  if (isVisible()) view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+  if (isVisible()) fitCanvas(view_, scene_->sceneRect());
 }
 
 void AstWidget::setProgram(const pl0::Program* program) {
@@ -479,12 +555,12 @@ void AstWidget::setProgram(const pl0::Program* program) {
   measure(root);
   draw(scene_, root, 0, 0);
   scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-24, -24, 24, 24));
-  view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+  fitCanvas(view_, scene_->sceneRect());
   fitPending_ = true;
   if (isVisible()) {
     QTimer::singleShot(0, this, [this] {
       if (isVisible() && fitPending_) {
-        view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+        fitCanvas(view_, scene_->sceneRect());
         fitPending_ = false;
       }
     });
@@ -559,18 +635,18 @@ void AstWidget::renderGrammar() {
   reveal(root, remaining, rule);
   hint_->setText(tr("最左推导 %1 / %2 · %3 · 叶子保留源码实际标识符和数值")
       .arg(static_cast<qulonglong>(grammarPosition_)).arg(static_cast<qulonglong>(grammarTotal_)).arg(rule));
-  measure(root);
-  draw(scene_, root, 0, 0, true);
-  scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-24, -24, 24, 24));
+  measureBook(root);
+  drawBook(scene_, root, 0, 0);
+  scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-40, -32, 40, 32));
   fitPending_ = true;
-  if (isVisible()) view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+  if (isVisible()) fitCanvas(view_, scene_->sceneRect());
 }
 
 void AstWidget::showEvent(QShowEvent* event) {
   QWidget::showEvent(event);
   if (fitPending_) QTimer::singleShot(0, this, [this] {
     if (isVisible()) {
-      view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+      fitCanvas(view_, scene_->sceneRect());
       fitPending_ = false;
     }
   });
@@ -580,6 +656,6 @@ void AstWidget::resizeEvent(QResizeEvent* event) {
   QWidget::resizeEvent(event);
   QTimer::singleShot(0, this, [this] {
     if (isVisible() && !scene_->items().empty())
-      view_->fitInView(scene_->sceneRect(), Qt::KeepAspectRatio);
+      fitCanvas(view_, scene_->sceneRect());
   });
 }
