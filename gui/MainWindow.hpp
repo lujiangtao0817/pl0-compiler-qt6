@@ -21,6 +21,7 @@ class QTabWidget;
 class QTimer;
 class QTreeWidget;
 class QTreeWidgetItem;
+class QStackedWidget;
 QT_END_NAMESPACE
 
 class CodeEditor;
@@ -138,6 +139,9 @@ class MainWindow final : public QMainWindow {
   AstWidget* astWidget_ = nullptr;
   AstWidget* syntaxTreeWidget_ = nullptr;
   AstWidget* grammarTreeWidget_ = nullptr;
+  QWidget* treePanel_ = nullptr;
+  QStackedWidget* treePages_ = nullptr;
+  QComboBox* treeMode_ = nullptr;
   QWidget* parseTracePanel_ = nullptr;
   QLabel* parseProgress_ = nullptr;
   QLabel* parseDetail_ = nullptr;

@@ -15,6 +15,7 @@
 #include <QGraphicsRectItem>
 #include <QDialog>
 #include <QComboBox>
+#include <QTabWidget>
 #include <iostream>
 #include <stdexcept>
 
@@ -50,6 +51,14 @@ int main(int argc, char** argv) {
     auto* next = window.findChild<QPushButton*>("parseNext");
     auto* timer = window.findChild<QTimer*>("parseTimer");
     require(tree && progress && next && timer, "replay controls exist");
+    auto* analysisTabs = window.findChild<QTabWidget*>("analysisTabs");
+    auto* treeMode = window.findChild<QComboBox*>("treeMode");
+    require(analysisTabs && analysisTabs->count() == 5 && treeMode && treeMode->currentIndex() == 0,
+            "single tree tab defaults to E/T/F view");
+    int treeTabs = 0;
+    for (int i = 0; i < analysisTabs->count(); ++i)
+      if (analysisTabs->tabText(i) == QString::fromUtf8("语法树")) ++treeTabs;
+    require(treeTabs == 1, "tree views share one entry");
     require(!next->isEnabled(), "empty trace cannot advance");
     invoke("compileSource");
     invoke("showParseTrace");
@@ -195,6 +204,9 @@ int main(int argc, char** argv) {
     require(labels() == secondLabels, "textbook backward and forward are deterministic");
     invoke("playParseTrace");
     require(timer->isActive(), "textbook playback starts");
+    treeMode->setCurrentIndex(2);
+    require(!timer->isActive(), "changing tree mode pauses analysis playback");
+    invoke("showSyntaxTree");
     invoke("pauseParseTrace");
     require(!timer->isActive(), "textbook playback pauses");
     invoke("showFullParseTrace");
@@ -240,6 +252,11 @@ int main(int argc, char** argv) {
     require(formalLabels() == QStringList{"E"}, "formal backward restores start symbol");
     grammar->grammarCommand(5);
     require(formalLabels() == fullFormal, "formal complete derivation restored");
+    if (argc > 6) {
+      window.show();
+      app.processEvents();
+      require(window.grab().save(QString::fromLocal8Bit(argv[6])), "save unified tree UI preview");
+    }
     auto checkFormalLayout = [&] {
       std::vector<QRectF> boxes;
       for (auto* item : formalView->scene()->items())

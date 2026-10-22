@@ -23,6 +23,7 @@
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QStackedWidget>
 #include <QStatusBar>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -256,6 +257,7 @@ void MainWindow::setupUi() {
   rightSplit->setChildrenCollapsible(false);
 
   analysisTabs_ = new QTabWidget(rightSplit);
+  analysisTabs_->setObjectName(QStringLiteral("analysisTabs"));
   analysisTabs_->setDocumentMode(true);
   tokensTable_ = makeTable({tr("#"), tr("词素"), tr("种类"), tr("值"), tr("位置")}, analysisTabs_);
   tokensTable_->setColumnWidth(0, 52);
@@ -324,18 +326,29 @@ void MainWindow::setupUi() {
   });
   connect(analysisTabs_, &QTabWidget::currentChanged, this, [this] {
     if (analysisTabs_->currentWidget() != parseTracePanel_ &&
-        analysisTabs_->currentWidget() != syntaxTreeWidget_) pauseParseTrace();
+        !(analysisTabs_->currentWidget() == treePanel_ && treePages_ &&
+          treePages_->currentWidget() == syntaxTreeWidget_)) pauseParseTrace();
   });
   renderParseTrace();
 
-  astWidget_ = new AstWidget(analysisTabs_);
-  analysisTabs_->addTab(astWidget_, tr("抽象语法树"));
+  treePanel_ = new QWidget(analysisTabs_);
+  auto* treeLayout = new QVBoxLayout(treePanel_);
+  treeLayout->setContentsMargins(4, 4, 4, 4);
+  auto* treeModeRow = new QHBoxLayout;
+  treeModeRow->addWidget(new QLabel(tr("视图"), treePanel_));
+  treeMode_ = new QComboBox(treePanel_);
+  treeMode_->setObjectName(QStringLiteral("treeMode"));
+  treeMode_->addItems({tr("表达式文法树（E / T / F）"), tr("整程序分析树"), tr("抽象语法树（AST）")});
+  treeModeRow->addWidget(treeMode_, 1);
+  treeLayout->addLayout(treeModeRow);
+  treePages_ = new QStackedWidget(treePanel_);
+  treeLayout->addWidget(treePages_, 1);
+  astWidget_ = new AstWidget(treePages_);
   connect(astWidget_, &AstWidget::sourceActivated, this,
       [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
         selectSourceRange(bl, bc, el, ec);
       });
-  syntaxTreeWidget_ = new AstWidget(analysisTabs_, true);
-  analysisTabs_->addTab(syntaxTreeWidget_, tr("教材分析树"));
+  syntaxTreeWidget_ = new AstWidget(treePages_, true);
   connect(syntaxTreeWidget_, &AstWidget::sourceActivated, this,
       [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
         selectSourceRange(bl, bc, el, ec);
@@ -350,21 +363,29 @@ void MainWindow::setupUi() {
       case 5: showFullParseTrace(); break;
     }
   });
-  grammarTreeWidget_ = new AstWidget(analysisTabs_, true, true);
-  analysisTabs_->addTab(grammarTreeWidget_, tr("表达式文法树"));
+  grammarTreeWidget_ = new AstWidget(treePages_, true, true);
   grammarTreeWidget_->setGrammarTrace({});
   connect(grammarTreeWidget_, &AstWidget::sourceActivated, this,
       [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
         selectSourceRange(bl, bc, el, ec);
       });
+  treePages_->addWidget(grammarTreeWidget_);
+  treePages_->addWidget(syntaxTreeWidget_);
+  treePages_->addWidget(astWidget_);
+  treePages_->setCurrentIndex(0);
+  connect(treeMode_, &QComboBox::currentIndexChanged, this, [this](int index) {
+    pauseParseTrace();
+    grammarTreeWidget_->grammarCommand(3);
+    treePages_->setCurrentIndex(index);
+  });
+  analysisTabs_->addTab(treePanel_, tr("语法树"));
 
   auto* runtimePanel = new QWidget(rightSplit);
   connect(analysisTabs_, &QTabWidget::currentChanged, this, [this, runtimePanel] {
     // The tree needs vertical space; runtime panels return on other tabs.
-    runtimePanel->setVisible(analysisTabs_->currentWidget() != astWidget_ &&
-                             analysisTabs_->currentWidget() != syntaxTreeWidget_ &&
-                             analysisTabs_->currentWidget() != grammarTreeWidget_);
-    if (analysisTabs_->currentWidget() != grammarTreeWidget_) grammarTreeWidget_->grammarCommand(3);
+    runtimePanel->setVisible(analysisTabs_->currentWidget() != treePanel_);
+    if (analysisTabs_->currentWidget() != treePanel_ ||
+        treePages_->currentWidget() != grammarTreeWidget_) grammarTreeWidget_->grammarCommand(3);
   });
   auto* runtimeLayout = new QVBoxLayout(runtimePanel);
   runtimeLayout->setContentsMargins(0, 0, 0, 0);
@@ -1205,7 +1226,7 @@ void MainWindow::renderParseTrace() {
         .arg(QString::fromStdString(event.rule.empty() ? event.detail : event.rule))
         .arg(event.range.begin.line).arg(event.range.begin.column).arg(event.depth));
     if (analysisTabs_->currentWidget() == parseTracePanel_ ||
-        analysisTabs_->currentWidget() == syntaxTreeWidget_)
+        (analysisTabs_->currentWidget() == treePanel_ && treePages_->currentWidget() == syntaxTreeWidget_))
       selectSourceRange(event.range.begin.line, event.range.begin.column,
                         event.range.end.line, event.range.end.column);
   }
@@ -1585,15 +1606,18 @@ void MainWindow::showParseTrace() {
 }
 
 void MainWindow::showAst() {
-  analysisTabs_->setCurrentWidget(astWidget_);
+  treeMode_->setCurrentIndex(2);
+  analysisTabs_->setCurrentWidget(treePanel_);
 }
 
 void MainWindow::showSyntaxTree() {
-  analysisTabs_->setCurrentWidget(syntaxTreeWidget_);
+  treeMode_->setCurrentIndex(1);
+  analysisTabs_->setCurrentWidget(treePanel_);
 }
 
 void MainWindow::showGrammarTree() {
-  analysisTabs_->setCurrentWidget(grammarTreeWidget_);
+  treeMode_->setCurrentIndex(0);
+  analysisTabs_->setCurrentWidget(treePanel_);
 }
 
 void MainWindow::showDiagnostics() {
