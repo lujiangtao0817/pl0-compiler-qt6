@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 
 #include "CodeEditor.hpp"
+#include "AstWidget.hpp"
 
 #include <QAbstractItemView>
 #include <QAction>
@@ -326,7 +327,18 @@ void MainWindow::setupUi() {
   });
   renderParseTrace();
 
+  astWidget_ = new AstWidget(analysisTabs_);
+  analysisTabs_->addTab(astWidget_, tr("语法树"));
+  connect(astWidget_, &AstWidget::sourceActivated, this,
+      [this](qulonglong bl, qulonglong bc, qulonglong el, qulonglong ec) {
+        selectSourceRange(bl, bc, el, ec);
+      });
+
   auto* runtimePanel = new QWidget(rightSplit);
+  connect(analysisTabs_, &QTabWidget::currentChanged, this, [this, runtimePanel] {
+    // The tree needs vertical space; runtime panels return on other tabs.
+    runtimePanel->setVisible(analysisTabs_->currentWidget() != astWidget_);
+  });
   auto* runtimeLayout = new QVBoxLayout(runtimePanel);
   runtimeLayout->setContentsMargins(0, 0, 0, 0);
   runtimeLayout->setSpacing(8);
@@ -680,6 +692,7 @@ void MainWindow::compileSource() { compileInternal(); }
 bool MainWindow::compileInternal() {
   runTimer_->stop();
   pauseParseTrace();
+  astWidget_->setProgram(nullptr);
   breakpoints_.clear();
   skipBreakpointOnce_ = -1;
   pausedAtBreakpoint_ = false;
@@ -711,6 +724,7 @@ bool MainWindow::compileInternal() {
 
   populateSymbols(result.symbols);
   populatePCode(result.code);
+  astWidget_->setProgram(result.program.get());
   lastResult_ = std::move(result);
   prepareVm();
   setState(AppState::Compiled,
@@ -1048,6 +1062,7 @@ void MainWindow::populateParseTrace(const std::vector<pl0::ParseTraceEvent>& tra
 }
 
 void MainWindow::clearParseTrace() {
+  if (astWidget_) astWidget_->setProgram(nullptr);
   pauseParseTrace();
   parseEvents_.clear();
   parsePosition_ = 0;
@@ -1535,6 +1550,10 @@ void MainWindow::showPCode() {
 
 void MainWindow::showParseTrace() {
   analysisTabs_->setCurrentWidget(parseTracePanel_);
+}
+
+void MainWindow::showAst() {
+  analysisTabs_->setCurrentWidget(astWidget_);
 }
 
 void MainWindow::showDiagnostics() {

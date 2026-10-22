@@ -24,6 +24,7 @@ class QTreeWidgetItem;
 QT_END_NAMESPACE
 
 class CodeEditor;
+class AstWidget;
 
 class MainWindow final : public QMainWindow {
   Q_OBJECT
@@ -64,6 +65,7 @@ class MainWindow final : public QMainWindow {
   void showSymbols();
   void showPCode();
   void showParseTrace();
+  void showAst();
   void previousParseEvent();
   void nextParseEvent();
   void playParseTrace();
@@ -131,6 +133,7 @@ class MainWindow final : public QMainWindow {
   QTableWidget* symbolsTable_ = nullptr;
   QTableWidget* pcodeTable_ = nullptr;
   QTreeWidget* parseTraceTree_ = nullptr;
+  AstWidget* astWidget_ = nullptr;
   QWidget* parseTracePanel_ = nullptr;
   QLabel* parseProgress_ = nullptr;
   QLabel* parseDetail_ = nullptr;

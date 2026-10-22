@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 #include "CodeEditor.hpp"
+#include "AstWidget.hpp"
 #include <QApplication>
 #include <QEventLoop>
 #include <QFontDatabase>
@@ -9,6 +10,10 @@
 #include <QTimer>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
+#include <QGraphicsView>
+#include <QGraphicsScene>
+#include <QGraphicsRectItem>
+#include <QDialog>
 #include <iostream>
 #include <stdexcept>
 
@@ -101,6 +106,62 @@ int main(int argc, char** argv) {
         errorSeen = true;
     }
     require(errorSeen, "error event can be replayed");
+    auto* ast = window.findChild<AstWidget*>();
+    auto* graph = window.findChild<QGraphicsView*>("astView");
+    require(ast && graph && graph->scene()->items().empty(), "failed compile has no misleading AST");
+    QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+        Q_ARG(QString, QStringLiteral("var x; begin x := 2 + 3 * 4 end.")));
+    invoke("compileSource");
+    invoke("showAst");
+    QGraphicsRectItem* plus = nullptr;
+    QGraphicsRectItem* multiply = nullptr;
+    std::vector<QGraphicsRectItem*> nodes;
+    for (auto* item : graph->scene()->items()) {
+      if (auto* rect = dynamic_cast<QGraphicsRectItem*>(item)) {
+        nodes.push_back(rect);
+        if (rect->data(0).toString() == QString::fromUtf8("二元运算 +")) plus = rect;
+        if (rect->data(0).toString() == QString::fromUtf8("二元运算 *")) multiply = rect;
+      }
+    }
+    require(plus && multiply, "AST contains actual plus and multiplication nodes");
+    require(multiply->rect().top() > plus->rect().top(), "multiplication nested beneath addition");
+    for (std::size_t i = 0; i < nodes.size(); ++i)
+      for (std::size_t j = i + 1; j < nodes.size(); ++j)
+        require(!nodes[i]->rect().intersects(nodes[j]->rect()), "AST nodes do not overlap");
+    multiply->setSelected(true);
+    require(editor->textCursor().selectedText() == QStringLiteral("3 * 4"), "AST selection locates expression source");
+    const qreal originalScale = graph->transform().m11();
+    graph->scale(1.2, 1.2);
+    require(graph->transform().m11() > originalScale, "graph supports zoom transform");
+    if (argc > 2) {
+      window.show();
+      app.processEvents();
+      require(window.grab().save(QString::fromLocal8Bit(argv[2])), "save AST preview");
+    }
+    auto* largeButton = window.findChild<QPushButton*>("astLarge");
+    require(largeButton != nullptr, "large AST control exists");
+    bool largeOpened = false;
+    bool largeSaved = argc <= 3;
+    QTimer::singleShot(50, &window, [&] {
+      if (auto* dialog = window.findChild<QDialog*>()) {
+        largeOpened = dialog->isVisible();
+        if (argc > 3) largeSaved = dialog->grab().save(QString::fromLocal8Bit(argv[3]));
+        dialog->accept();
+      }
+    });
+    largeButton->click();
+    require(largeOpened && largeSaved, "large AST opens and closes");
+    editor->insertPlainText("5");
+    require(graph->scene()->items().empty(), "editing invalidates AST");
+    for (const auto& source : {
+        "var a[3], x; begin a[1] := 2; x := a[1]; read(x); writeln(x) end.",
+        "var x; procedure p; begin x := x + 1 end; begin call p end.",
+        "var x; begin x := 0; while x < 3 do x++; if odd x then write(x) else write(0); repeat x-- until x = 0 end."}) {
+      QMetaObject::invokeMethod(&window, "setDemoSource", Qt::DirectConnection,
+                               Q_ARG(QString, QString::fromUtf8(source)));
+      invoke("compileSource");
+      require(!graph->scene()->items().empty(), "extended constructs render AST");
+    }
     std::cout << "Parse replay GUI regression checks passed\n";
     return 0;
   } catch (const std::exception& error) {
